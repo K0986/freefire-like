@@ -1,4 +1,3 @@
-# app/token_manager.py
 import os
 import json
 import threading
@@ -13,6 +12,8 @@ logger = logging.getLogger(__name__)
 AUTH_URL = os.getenv("AUTH_URL", "https://jwtxthug.up.railway.app/token") 
 CACHE_DURATION = timedelta(hours=7).seconds
 TOKEN_REFRESH_THRESHOLD = timedelta(hours=6).seconds
+MAX_RETRIES = 3
+RETRY_DELAY = 2  # seconds
 
 class TokenCache:
     def __init__(self, servers_config):
@@ -43,18 +44,22 @@ class TokenCache:
             tokens = []
 
             for user in creds:
-                try:
-                    params = {'uid': user['uid'], 'password': user['password']}
-                    response = self.session.get(AUTH_URL, params=params, timeout=5)
-                    if response.status_code == 200:
-                        token = response.json().get("token")
-                        if token:
-                            tokens.append(token)
-                    else:
-                        logger.warning(f"Failed to fetch token for {user['uid']} (server {server_key}): Status {response.status_code}, Response: {response.text}")
-                except Exception as e:
-                    logger.error(f"Error fetching token for {user['uid']} (server {server_key}): {str(e)}")
-                    continue
+                retry_count = 0
+                while retry_count < MAX_RETRIES:
+                    try:
+                        params = {'uid': user['uid'], 'password': user['password']}
+                        response = self.session.get(AUTH_URL, params=params, timeout=5)
+                        if response.status_code == 200:
+                            token = response.json().get("token")
+                            if token:
+                                tokens.append(token)
+                            break
+                        else:
+                            logger.warning(f"Failed to fetch token for {user['uid']} (server {server_key}): Status {response.status_code}, Response: {response.text}")
+                    except Exception as e:
+                        logger.error(f"Error fetching token for {user['uid']} (server {server_key}): {str(e)}")
+                    retry_count += 1
+                    time.sleep(RETRY_DELAY)
 
             if tokens:
                 self.cache[server_key] = tokens
@@ -74,7 +79,6 @@ class TokenCache:
             if config_data:
                 return json.loads(config_data)
 
-          
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', f'{server_key.lower()}_config.json')
             if os.path.exists(config_path):
                 with open(config_path, 'r') as f:
@@ -97,3 +101,4 @@ def get_headers(token: str):
         "X-GA": "v1 1",
         "ReleaseVersion": "OB49"
     }
+
